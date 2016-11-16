@@ -32,6 +32,7 @@ from rhsm.profile import get_profile, RPMProfile
 import subscription_manager.injection as inj
 from subscription_manager.jsonwrapper import PoolWrapper
 from rhsm import ourjson as json
+from subscription_manager.isodate import parse_date
 
 _ = gettext.gettext
 log = logging.getLogger(__name__)
@@ -558,6 +559,61 @@ class PoolTypeCache(object):
 
     def clear(self):
         self.pooltype_map = {}
+
+
+class ContentAccessCache(object):
+    CACHE_FILE = "/var/lib/rhsm/cache/content_access"
+
+    def __init__(self):
+        self.cp_provider = inj.require(inj.CP_PROVIDER)
+        self.identity = inj.require(inj.IDENTITY)
+
+    def _query_for_update(self, cert, if_modified_since=None):
+        uep = self.cp_provider.get_consumer_auth_cp()
+        response = uep.getContent(self.identity.uuid, if_modified_since=if_modified_since)
+        if response is None or "contentListing" not in response:
+            return False
+        else:
+            self._update_cert(cert, response)
+            self._update_cache(response)
+            return True
+
+    def exists(self):
+        return os.path.exists(self.CACHE_FILE)
+
+    def remove(self):
+        return os.remove(self.CACHE_FILE)
+
+    def check_for_update(self, cert):
+        data = json.loads(self.read())
+        last_update = parse_date(data["lastUpdate"])
+        return self._query_for_update(cert, if_modified_since=last_update)
+
+    def force_update(self, cert):
+        self._query_for_update(cert)
+
+    @staticmethod
+    def _update_cert(cert, data):
+        with open(cert.path, "r") as cert_file:
+            cert_data = cert_file.read()
+            begin, _ = cert_data.split("-----BEGIN ENTITLEMENT DATA-----", 1)
+            _, end = cert_data.split("-----END ENTITLEMENT DATA-----", 1)  # FIXME(khowell) CP should return sig too
+            if cert.serial not in data["contentListing"]:
+                log.warning("Cert serial %s not contained in content listing; not updating it." % cert.serial)
+                return
+            updated_cert = begin + data["contentListing"][cert.serial] + end
+        with open(cert.path, "w") as output:
+            log.info("Updating certificate %s with new content" % cert.serial)
+            output.write(updated_cert)
+
+    def _update_cache(self, data):
+        log.debug("Updating content access cache")
+        with open(self.CACHE_FILE, "w") as cache:
+            cache.write(json.dumps(data))
+
+    def read(self):
+        with open(self.CACHE_FILE, "r") as cache:
+            return cache.read()
 
 
 class RhsmIconCache(CacheManager):

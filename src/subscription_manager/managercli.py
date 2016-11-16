@@ -1200,11 +1200,11 @@ class RegisterCommand(UserPassCommand):
             except connection.RestlibException, re:
                 print_error(re.msg)
 
-        if (self.options.consumerid or self.options.activation_keys or self.autoattach):
-            log.info("System registered, updating entitlements if needed")
-            # update certs, repos, and caches.
-            # FIXME: aside from the overhead, should this be cert_action_client.update?
-            self.entcertlib.update()
+        # unconditionally update entitlement certs, since content access certificate may be present
+        log.info("System registered, updating entitlements if needed")
+        # update certs, repos, and caches.
+        # FIXME: aside from the overhead, should this be cert_action_client.update?
+        self.entcertlib.update()
 
         subscribed = 0
         if (self.options.activation_keys or self.autoattach):

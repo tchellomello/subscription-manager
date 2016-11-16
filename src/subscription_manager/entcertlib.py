@@ -35,6 +35,8 @@ _ = gettext.gettext
 
 cfg = initConfig()
 
+CONTENT_ACCESS_PRODUCT_ID = "content_access"
+
 
 class EntCertActionInvoker(certlib.BaseActionInvoker):
     """Invoker for entitlement certificate updating actions."""
@@ -110,6 +112,7 @@ class EntCertUpdateAction(object):
         self.ent_dir = inj.require(inj.ENT_DIR)
         self.identity = require(IDENTITY)
         self.report = EntCertUpdateReport()
+        self.content_access_cache = inj.require(inj.CONTENT_ACCESS_CACHE)
 
     # NOTE: this is slightly at odds with the manual cert import
     #       path, manual import certs wont get a 'report', etc
@@ -138,6 +141,7 @@ class EntCertUpdateAction(object):
             # we need to refresh the ent_dir object before calling
             # content updating actions.
             self.ent_dir.refresh()
+            self.content_access_hook()
             self.repo_hook()
 
             # NOTE: Since we have the yum repos defined here now
@@ -147,6 +151,15 @@ class EntCertUpdateAction(object):
 
             # reload certs and update branding
             self.branding_hook()
+
+        else:
+            content_access_certs = self.ent_dir.list_for_product(CONTENT_ACCESS_PRODUCT_ID)
+            updated = False
+            for content_access_cert in content_access_certs:
+                updated = self.content_access_cache.check_for_update(content_access_cert) or updated
+            if updated:
+                self.ent_dir.refresh()
+                self.repo_hook()
 
         # if we want the full report, we can get it, but
         # this makes CertLib.update() have same sig as reset
@@ -160,6 +173,15 @@ class EntCertUpdateAction(object):
 
         ent_cert_bundles_installer = EntitlementCertBundlesInstaller(self.report)
         ent_cert_bundles_installer.install(cert_bundles)
+
+    def content_access_hook(self):
+        content_access_certs = self.ent_dir.list_for_product(CONTENT_ACCESS_PRODUCT_ID)
+        for content_access_cert in content_access_certs:
+            self.content_access_cache.force_update(content_access_cert)
+        if len(content_access_certs) == 0 and self.content_access_cache.exists():
+            self.content_access_cache.remove()
+        else:
+            self.ent_dir.refresh()
 
     def branding_hook(self):
         """Update branding info based on entitlement cert changes."""
